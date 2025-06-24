@@ -1,0 +1,21 @@
+```{r}
+#Import libraries and data
+library(readxl)
+library(knitr)
+library(openxlsx)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(DataExplorer)
+library(gt)
+library(htmltools)
+library(tibble)
+
+VDR <- read_excel("C:/Users/paust/Documents/VDR.xlsx")
+names(VDR)
+
+#Iam changing something to see if I can commit it 
+
+```
