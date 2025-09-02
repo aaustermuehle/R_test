@@ -1,0 +1,697 @@
+---
+title: "VDR"
+date: "2025-07-10"
+---
+
+
+#Libraries:
+```{r}
+library(tidyverse)
+library(lubridate)
+library(janitor)
+library(readxl)
+library(glue)
+library(broom)
+library(dplyr)
+library(ggplot2)
+library(janitor)
+library(visdat)
+library(writexl)
+```
+
+################################Import and Clean#############################################
+```{r} 
+#Import:
+vdr <- read_xlsx("C:/Users/aaust/OneDrive/Desktop/VDR/vdr.xlsx")
+
+#Clean column names: 
+vdr <- clean_names(vdr)
+
+#Separate the columns into groups for organization:
+demographics <- c("mrn", "dob", "age_months", "sex", "weight_kg", "ethnicity", "prematurity")
+
+comorbidities <- c("hx_chronic_lung_disease", "history_of_congenital_heart_disease", "hx_rad",
+                   "presence_of_trach", "new_trach_vent_at_discharge")
+
+admission_dx <- c("date_of_admission", "primary_dx_based_on_chart_review", "epic_primary_diagnosis", 
+                  "primary_dx", "notes")
+
+vdr_timing <- c("time_on_vdr", "time_off_vdr", "length_of_time_on_vdr", 
+                "duration_on_vdr", "first_time_ordered_for_vent_off_vdr", 
+                "last_time_vdr_settings_are_charted")
+
+pre_vdr <- c(
+  "ph_pre_vdr", "pa_co2_pre_vdr", "pa_o2_pre_vdr", "average_pa_co2_in_2_hours_pre_vdr",
+  "number_of_abgs_in_2_hours_pre_vdr", "spo2_pre_vdr", "fi_o2_pre_vdr", 
+  "mode_of_vent_pre_vdr", "pip_pre_vdr", "ps_pre_vdr", "pc_pre_vdr", 
+  "peep_pre_vdr", "mandatory_expiratory_tv_pre_vdr", 
+  "mandatory_exp_tv_kg_pre_vdr", "map_pre_vdr", "oi_pre_vdr", 
+  "osi_pre_vdr", "p_f_pre_vdr", "s_f_pre_vdr"
+)
+
+vdr_2h <- c(
+  "ph_2_hours_into_vdr_run", "pa_co2_2_hours_into_vdr_run", "pa_o2_2_hours_into_vdr_run",
+  "average_co2_values_between_0_and_2_hours_on_vdr", "average_ph_between_0_and_2_hours_on_vdr",
+  "number_of_abg_in_2_hour_interval", "spo2_2_hours_into_vdr_run", "fi_o2_2_hours_into_vdr_run",
+  "osc_peep_2_hours_into_vdr_run", "operating_pressure_2_hours_into_vdr_run",
+  "map_2_hours_into_vdr_run", "oi_2_hours_into_vdr_run", "osi_2_hours_into_vdr_run",
+  "p_f_2_hours_into_vdr_run", "s_f_2_hours_into_vdr_run"
+)
+
+vdr_6h <- c(
+  "ph_6_hours_into_vdr_run", "pa_co2_6_hours_into_vdr_run", "pa_o2_6_hours_into_vdr_run",
+  "average_ph_between_2_and_6_hours_on_vdr", "average_co2_values_between_2_between_6_hours_on_vdr",
+  "number_of_abg_between_2_and_6_hours_on_vdr", "spo2_6_hours_into_vdr_run", "fi_o2_6_hours_into_vdr_run",
+  "map_6_hours_into_vdr_run", "oi_6_hours_into_vdr_run", "osi_6_hours_into_vdr_run",
+  "p_f_6_hours_into_vdr_run", "s_f_6_hours_into_vdr_run"
+)
+
+vdr_final <- c(
+  "last_vdr_fi_o2", "last_vdr_operating_pressure", "last_vdr_osc_peep", "last_vdr_map", 
+  "last_oi_on_vdr", "last_p_f_on_vdr", "ph_right_before_end_of_vdr_run", 
+  "pa_co2_right_before_end_of_vdr_run", "pa_o2_right_before_end_of_vdr_run"
+)
+
+post_vdr_2h <- c(
+  "ph_2_hours_off_of_vdr", "pa_co2_2_hours_off_of_vdr", "pa_o2_2_hours_off_of_vdr",
+  "average_pa_co2_values_between_0_and_2_hours_off_vdr", "average_ph_between_0_and_2_hours_off_of_vdr",
+  "fi_o2_2_hours_off_of_vdr", "spo2_2_hours_off_of_vdr", 
+  "mode_of_vent_2_hours_off_of_vdr", "pip_2_hours_off_of_vdr", "pc_2_hours_off_of_vdr", 
+  "peep_2_hours_off_of_vdr", "map_2_hours_off_of_vdr", "oi_2_hours_off_of_vdr", 
+  "osi_2_hours_off_of_vdr", "p_f_2_hours_off_of_vdr", "s_f_2_hours_off_of_vdr"
+)
+
+post_vdr_6h <- c(
+  "ph_6_hours_off_of_vdr", "pa_co2_6_hours_off_of_vdr_run", "pa_o2_6_hours_off_of_vdr",
+  "average_pa_co2_between_2_and_6_hours_off_of_vdr", "average_ph_between_2_and_6_hours_off_of_vdr",
+  "fi_o2_6_hours_off_of_vdr", "mode_of_vent_6_hours_off_of_vdr", 
+  "oi_6_hours_off_of_vdr", "osi_6_hours_off_of_vdr", "p_f_6_hours_off_of_vdr", "s_f_6_hours_off_of_vdr"
+)
+
+outcomes <- c("mortality_on_vdr", "x48_hour_mortality", "x28_day_mortality", 
+              "picu_los", "hospital_los", "total_intubation_time", "ptx")
+
+interventions <- c("vasopressor_use_during_vdr_run", "ecmo_during_vdr_run", "nmb_used_during_vdr_run",
+                   "ino_use_during_vdr", "steroid_use_during_vdr", "which_steroid")
+
+resp_micro <- c("positive_respiratory_culture", "bug", "positive_rvp", "virus_on_rvp",
+                "secretion_day_description_before", "clearance_regimen_before_vdr",
+                "secretion_description_day_taken_off", "clearance_regimen_after_vdr",
+                "respiratory_clearance_frequency_pre_post")
+
+comorb_flags <- c("neuromusc", "cvd", "respiratory", "renal", "gi", "hemato_immu", "metabolic", 
+                  "congeni_genetic", "malignancy", "neonatal", "tech_dep", "transplant", "ccc_flag")
+
+# Combine all into a named list
+groups <- list(
+  demographics = demographics,
+  comorbidities = comorbidities,
+  admission_dx = admission_dx,
+  vdr_timing = vdr_timing,
+  pre_vdr = pre_vdr,
+  vdr_2h = vdr_2h,
+  vdr_6h = vdr_6h,
+  vdr_final = vdr_final,
+  post_vdr_2h = post_vdr_2h,
+  post_vdr_6h = post_vdr_6h,
+  outcomes = outcomes,
+  interventions = interventions,
+  resp_micro = resp_micro,
+  comorb_flags = comorb_flags
+)
+
+
+#Change all DOB values to numeric
+vdr$dob_clean <- as.numeric(vdr$dob)
+
+#numeric to date
+vdr$dob_clean <- as.Date(vdr$dob_clean, origin = "1899-12-30")
+
+#remove all instances of "never on VDR"
+vdr <- vdr[!grepl("never on vdr", vdr$dob, ignore.case = TRUE), ]
+
+bad_phrases <- c("never on vdr", "never on vdr", "not on vdr", "not on the vdr", "can't find patient", "can't find a patient",
+                 "almost no vent setting documentation", "actually on bipap")
+
+pattern <- paste(bad_phrases, collapse = "|")  # creates a regex pattern
+vdr <- vdr[!grepl(pattern, vdr$dob, ignore.case = TRUE), ]
+
+#removing the first row because it is a key 
+vdr <- vdr[-1, ]
+
+#clean up prematurity
+vdr <- vdr %>%
+  mutate(prematurity_clean = case_when(
+    prematurity == "1" ~ 1,
+    prematurity == "0" ~ 0,
+    TRUE ~ NA_real_  # Treat "unknown", "not documented", etc as NA
+  ))
+
+vdr$prematurity_clean <- as.numeric(as.character(vdr$prematurity))
+
+# Now define and account for missingness: 
+# First, missingness by column:
+
+# Create a tidy table with count and % missing for every column
+missing_by_col <- vdr %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "missing_count") %>%
+  mutate(
+    total_rows = nrow(vdr),
+    percent_missing = round(100 * missing_count / total_rows, 1)
+  ) %>%
+  arrange(desc(percent_missing))
+
+View(missing_by_col) 
+
+# Identify columns with 100% missingness:
+cols_drop_100 <- missing_by_col %>%
+  filter(percent_missing == 100) %>%
+  pull(variable)
+
+# See which columns those are: 
+view(cols_drop_100)
+
+# Drop those columns from vdr
+if (length(cols_drop_100) > 0) {
+  vdr <- vdr %>% select(-all_of(cols_drop_100))
+}
+
+# Update groups list with new kept columns:
+groups <- lapply(groups, function(x) intersect(x, names(vdr)))
+
+
+# Now, missingness by row: 
+cols_to_check <- names(vdr)
+
+# Safety check: if you somehow excluded everything, stop early
+if (length(cols_to_check) == 0) {
+  stop("No columns available to assess for row-wise missingness. Something has gone terribly wrong.")
+}
+
+# Compute row-wise missingness
+vdr <- vdr %>%
+  mutate(
+    n_checked    = length(cols_to_check),
+    n_missing    = rowSums(is.na(pick(all_of(cols_to_check)))),
+    n_nonmissing = n_checked - n_missing,
+    miss_pct     = round(100 * n_missing / n_checked, 1)
+  )
+
+# Show a quick table of patient-level missingness (highest first)
+row_missing_table <- vdr %>%
+  select(any_of(c("mrn")), n_checked, n_nonmissing, n_missing, miss_pct) %>%
+  arrange(desc(miss_pct))
+view(row_missing_table)
+
+# Set an adjustable threshold for elimination (start at 75%)
+row_missing_threshold <- 75
+
+# Identify rows to exclude vs keep (≥ threshold = exclude)
+vdr_rows_excluded <- vdr %>% filter(miss_pct >= row_missing_threshold)
+vdr_rows_kept     <- vdr %>% filter(miss_pct <  row_missing_threshold | is.na(miss_pct))
+
+# Print counts and list of excluded MRNs with their missingness %
+cat("\nRow-wise missingness threshold: ", row_missing_threshold, "%\n", sep = "")
+cat("Rows kept: ", nrow(vdr_rows_kept), "\n", sep = "")
+
+# Make the elimination effective for downstream steps
+vdr <- vdr_rows_kept
+
+#Drop helper columns from the kept dataset:
+vdr <- vdr %>% select(-n_checked, -n_missing, -n_nonmissing, -miss_pct)
+
+#After this cleaning chunk, we end with 
+##Rows: 111
+##Columns: 244
+#Save the clean dataset as a new xlsx for distribution: 
+write_xlsx(vdr, "C:/Users/aaust/OneDrive/Desktop/VDR/vdr_clean.xlsx")
+```
+################################Start of data analysis#######################################
+####Time on VDR####
+```{r}
+#calculate total time on VDR
+
+str(vdr$time_on_vdr_16)
+str(vdr$time_off_vdr)
+
+vdr$total_time_on_vdr <- vdr$time_off_vdr - vdr$time_on_vdr_16
+vdr$total_time_on_vdr_hours <- as.numeric(vdr$total_time_on_vdr, units = "hours")
+
+#looking for outliers on vdr time
+summary(vdr$total_time_on_vdr_hours)
+hist(vdr$total_time_on_vdr_hours)
+
+#visualizing time on VDR
+vdr_trimmed <- vdr[!vdr$total_time_on_vdr_hours %in% sort(vdr$total_time_on_vdr_hours, decreasing = TRUE)[1:2], ]
+
+ggplot(vdr_trimmed, aes(x = total_time_on_vdr_hours)) +
+  geom_histogram(binwidth = 12, fill = "steelblue", color = "black") +
+  labs(
+    title = "Histogram of VDR Time (Excluding Top 2 Outliers)",
+    x = "Total Time on VDR (Hours)",
+    y = "Number of Patients"
+  ) +
+  theme_minimal()
+
+# Save as vector PDF for Illustrator
+ggsave("time_on_vdr.pdf", plot = last_plot(), device = cairo_pdf,
+       width = 8, height = 6, units = "in")
+
+```
+
+####Define illness####
+```{r}
+#Define illness (Bronchiolitis vs. not; column 'primary dx based on chart review')
+#make a new variable called dx that assigns either bronchiolitis or other to each patient based on the following rules: 
+
+vdr <- vdr %>%
+  mutate(
+    dx = case_when(
+      # 1. Direct mention of bronchiolitis
+      str_detect(tolower(`primary_dx_based_on_chart_review`), "bronchiolitis") ~ "bronchiolitis",
+      
+      # 2. Mentions of pneumonia, virus, viral, PNA *and* age < 24 months
+      (str_detect(tolower(`primary_dx_based_on_chart_review`), "pna|virus|viral|pneumonia") & 
+       `age_months` < 24) ~ "bronchiolitis",
+      
+      # 3. Everything else
+      TRUE ~ "other"
+    )
+  )
+
+#Eliminate rows that do not have a primary diagnosis (those rows also mostly had no other info recorded)
+vdr <- vdr %>% 
+  filter(!is.na(`primary_dx_based_on_chart_review`))
+
+#Visualize the re-assigned dxs 
+View(vdr %>% select(`primary_dx_based_on_chart_review`, 'age_months', dx))
+
+#How many bronchiolitics vs. others? 
+vdr %>%
+  dplyr::count(dx) %>%
+  mutate(percent = round(100 * n / sum(n), 1))
+```
+
+####CO2 Reduction####
+```{r}
+#visualizing CO2 reduction
+co2_cols <- c(
+  "pa_co2_pre_vdr",
+  "average_co2_values_between_0_and_2_hours_on_vdr",
+  "pa_co2_2_hours_into_vdr_run",
+  "average_co2_values_between_2_between_6_hours_on_vdr",
+  "pa_co2_6_hours_into_vdr_run",
+  "pa_co2_right_before_end_of_vdr_run",
+  "average_pa_co2_values_between_0_and_2_hours_off_vdr",
+  "pa_co2_2_hours_off_of_vdr",
+  "average_pa_co2_between_2_and_6_hours_off_of_vdr",
+  "pa_co2_6_hours_off_of_vdr_run"
+)
+
+vdr[co2_cols] <- lapply(vdr[co2_cols], function(col) {
+  col <- ifelse(col == ">94", "95", col)
+  as.numeric(col)
+})
+
+co2_means <- vdr %>%
+  summarise(across(all_of(co2_cols), ~mean(., na.rm = TRUE))) %>%
+  pivot_longer(everything(), names_to = "timepoint", values_to = "mean_co2") %>%
+  mutate(
+    timepoint = factor(timepoint, levels = co2_cols)
+  )
+
+View(co2_means)
+
+co2_long <- vdr %>%
+  dplyr::select(dx, all_of(co2_cols)) %>%
+  pivot_longer(-dx, names_to = "timepoint", values_to = "co2") %>%
+  group_by(dx, timepoint) %>%
+  summarise(mean_co2 = mean(co2, na.rm = TRUE), .groups = "drop") %>%
+  mutate(timepoint = factor(timepoint, levels = co2_cols))
+
+ggplot(co2_long, aes(x = timepoint, y = mean_co2, color = dx, group = dx)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "Mean PaCO₂ Over Time by Diagnosis",
+    x = "Timepoint",
+    y = "Mean PaCO₂ (mmHg)",
+    color = "Diagnosis"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+####FiO2 reduction####
+```{r}
+#visualizing o2 reduction
+fi_o2_cols <- c(
+  "fi_o2_pre_vdr",
+  "fi_o2_2_hours_into_vdr_run",
+  "fi_o2_6_hours_into_vdr_run",
+  "last_vdr_fi_o2",
+  "fi_o2_2_hours_off_of_vdr",
+  "fi_o2_6_hours_off_of_vdr"
+)
+
+vdr[fi_o2_cols] <- lapply(vdr[fi_o2_cols], function(col) {
+  col <- ifelse(col == ">1.0", "1.0", col)
+  as.numeric(col)
+})
+
+fi_o2_means <- vdr %>%
+  summarise(across(all_of(fi_o2_cols), ~mean(., na.rm = TRUE))) %>%
+  pivot_longer(everything(), names_to = "timepoint", values_to = "mean_fi_o2") %>%
+  mutate(timepoint = factor(timepoint, levels = fi_o2_cols))
+
+View(fi_o2_means)
+
+fi_o2_long <- vdr %>%
+  select(dx, all_of(fi_o2_cols)) %>%
+  pivot_longer(-dx, names_to = "timepoint", values_to = "fi_o2") %>%
+  group_by(dx, timepoint) %>%
+  summarise(mean_fi_o2 = mean(fi_o2, na.rm = TRUE), .groups = "drop") %>%
+  mutate(timepoint = factor(timepoint, levels = fi_o2_cols))
+
+ggplot(fi_o2_long, aes(x = timepoint, y = mean_fi_o2, color = dx, group = dx)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "Mean FiO₂ Over Time by Diagnosis",
+    x = "Timepoint",
+    y = "FiO₂ (Fraction of Inspired Oxygen)",
+    color = "Diagnosis"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+
+####OI reduction####
+```{r}
+#visualizing OI reduction
+oi_cols <- c(
+  "oi_pre_vdr",
+  "oi_2_hours_into_vdr_run",
+  "oi_6_hours_into_vdr_run",
+  "last_oi_on_vdr",
+  "oi_2_hours_off_of_vdr",
+  "oi_6_hours_off_of_vdr"
+)
+
+vdr[oi_cols] <- lapply(vdr[oi_cols], function(col) {
+  col <- ifelse(col == ">40", "40", col)  # adjust as needed
+  as.numeric(col)
+})
+
+oi_means <- vdr %>%
+  summarise(across(all_of(oi_cols), ~mean(., na.rm = TRUE))) %>%
+  pivot_longer(everything(), names_to = "timepoint", values_to = "mean_oi") %>%
+  mutate(timepoint = factor(timepoint, levels = oi_cols))
+
+View(oi_means)
+
+oi_long <- vdr %>%
+  select(dx, all_of(oi_cols)) %>%
+  pivot_longer(-dx, names_to = "timepoint", values_to = "oi") %>%
+  group_by(dx, timepoint) %>%
+  summarise(mean_oi = mean(oi, na.rm = TRUE), .groups = "drop") %>%
+  mutate(timepoint = factor(timepoint, levels = oi_cols))
+
+ggplot(oi_long, aes(x = timepoint, y = mean_oi, color = dx, group = dx)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "Mean Oxygenation Index (OI) Over Time by Diagnosis",
+    x = "Timepoint",
+    y = "OI",
+    color = "Diagnosis"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+####Multivariate model####
+```{r}
+#multivariable model
+#first create a new variable, MAP reduction
+#need to make MAP PRE VDR a number
+vdr$map_pre_vdr <- as.numeric(vdr$map_pre_vdr)
+
+vdr$map_absolute_reduction <- vdr$map_pre_vdr - vdr$last_vdr_map
+
+#univariable model
+# For diagnosis (dx)
+summary(lm(map_absolute_reduction ~ dx, data = vdr))
+
+# For age (age_months)
+summary(lm(map_absolute_reduction ~ age_months, data = vdr))
+
+# For weight (weight_kg)
+summary(lm(map_absolute_reduction ~ weight_kg, data = vdr))
+
+# For prematurity
+summary(lm(map_absolute_reduction ~ prematurity_clean, data = vdr))
+
+# For chronic lung disease
+summary(lm(map_absolute_reduction ~ hx_chronic_lung_disease, data = vdr))
+
+# For radiation history
+summary(lm(map_absolute_reduction ~ hx_rad, data = vdr))
+
+# For congenital heart disease
+summary(lm(map_absolute_reduction ~ history_of_congenital_heart_disease, data = vdr))
+
+# For presence of trach
+summary(lm(map_absolute_reduction ~ presence_of_trach, data = vdr))
+
+```
+
+
+####MAP reduction####; need to build out trends
+```{r}
+#boxplot for MAP reduction
+ggplot(vdr, aes(x = dx, y = map_absolute_reduction)) +
+  geom_boxplot() +
+  labs(title = "MAP Reduction by Diagnosis", y = "MAP Reduction", x = "Diagnosis")
+```
+
+####Starting MAP by year####
+```{r}
+#VDR trends over time (specifially MAP at VDR initiation)
+# Create year and month variables
+vdr$vdr_year <- year(vdr$date_of_admission)
+vdr$vdr_month <- floor_date(vdr$date_of_admission, unit = "month")
+
+map_by_year <- vdr %>%
+  group_by(vdr_year) %>%
+  summarise(
+    mean_map_pre_vdr = mean(map_pre_vdr, na.rm = TRUE),
+    sd_map_pre_vdr = sd(map_pre_vdr, na.rm = TRUE),
+    n = n(),
+    sem_map_pre_vdr = sd_map_pre_vdr / sqrt(n)
+  )
+
+library(scales)  # for pretty_breaks()
+
+ggplot(map_by_year, aes(x = vdr_year, y = mean_map_pre_vdr)) +
+  geom_line() +
+  geom_point() +
+  geom_errorbar(aes(ymin = mean_map_pre_vdr - sem_map_pre_vdr,
+                    ymax = mean_map_pre_vdr + sem_map_pre_vdr),
+                width = 0.2) +
+  scale_x_continuous(breaks = unique(map_by_year$vdr_year)) +
+  labs(title = "Average Pre-VDR MAP by Year",
+       x = "Year of Admission",
+       y = "Mean MAP Before VDR (± SEM)") +
+  theme_minimal()
+```
+
+####VDR use over the years####
+```{r}
+#VDR frequency over time
+ggplot(vdr, aes(x = factor(vdr_year))) +
+  geom_bar(fill = "steelblue", color = "black") +
+  labs(
+    title = "Number of Patients on VDR by Year",
+    x = "Year",
+    y = "Number of Patients"
+  ) +
+  theme_minimal()
+
+```
+
+####PALICC Compliance####
+```{r}
+#make a re-usable compliance function
+check_palicc2_compliance <- function(fio2, peep, pip, ph) {
+  fio2_rounded <- round(fio2 / 100, 1)
+
+  palicc_peepfio2 <- case_when(
+    fio2_rounded == 0.3 & peep >= 5 ~ TRUE,
+    fio2_rounded == 0.4 & peep >= 5 ~ TRUE,
+    fio2_rounded == 0.5 & peep >= 8 ~ TRUE,
+    fio2_rounded == 0.6 & peep >= 10 ~ TRUE,
+    fio2_rounded == 0.7 & peep >= 10 ~ TRUE,
+    fio2_rounded == 0.8 & peep >= 14 ~ TRUE,
+    fio2_rounded == 0.9 & peep >= 14 ~ TRUE,
+    fio2_rounded == 1.0 & peep >= 18 ~ TRUE,
+    TRUE ~ FALSE
+  )
+
+  pip_ok <- pip <= 28
+  ph_ok <- ph >= 7.2
+
+  palicc_peepfio2 & pip_ok & ph_ok
+}
+
+
+#Oscillatory PEEP = peep at 2, 6, 24 hours + 2
+# Clean oscillatory PEEP and add 2
+vdr <- vdr %>%
+  mutate(
+    peep_2h = as.numeric(ifelse(grepl("^[0-9.]+$", osc_peep_2_hours_into_vdr_run),
+                                osc_peep_2_hours_into_vdr_run,
+                                NA)) + 2,
+    peep_6h = as.numeric(ifelse(grepl("^[0-9.]+$", osc_peep_6_hours_into_vdr_run),
+                                osc_peep_6_hours_into_vdr_run,
+                                NA)) + 2,
+    peep_24h = as.numeric(ifelse(grepl("^[0-9.]+$", osc_peep_24_hours_into_vdr_run),
+                                 osc_peep_24_hours_into_vdr_run,
+                                 NA)) + 2
+  )
+
+# Apply PALICC2 compliance definition at all time points
+vdr <- vdr %>%
+  mutate(
+    peep_pre = peep_pre_vdr,
+    peep_last = as.numeric(ifelse(grepl("^[0-9.]+$", last_vdr_osc_peep), last_vdr_osc_peep, NA)) + 2,
+
+    compliant_pre = check_palicc2_compliance(fi_o2_pre_vdr, peep_pre, pip_pre_vdr, p_h_pre_vdr),
+    compliant_2h = check_palicc2_compliance(fi_o2_2_hours_into_vdr_run, peep_2h, pulsatile_flowrate_2_hours_into_vdr, p_h_2_hours_into_vdr_run),
+    compliant_6h = check_palicc2_compliance(fi_o2_6_hours_into_vdr_run, peep_6h, pulsatile_flowrate_6_hours_into_vdr, p_h_6_hours_into_vdr_run),
+    compliant_24h = check_palicc2_compliance(fi_o2_24_hours_into_run, peep_24h, pulsatile_flowrate_24_hours_into_vdr, p_h_24_hours_into_vdr_run),
+    compliant_last = check_palicc2_compliance(last_vdr_fi_o2, peep_last, last_vdr_pulsatile_flowrate, p_h_right_before_end_of_vdr_run)
+  )
+
+vdr_long <- vdr %>%
+  select(dx, starts_with("compliant_")) %>%
+  pivot_longer(
+    cols = starts_with("compliant_"),
+    names_to = "timepoint",
+    values_to = "compliant"
+  ) %>%
+  mutate(
+    timepoint = str_replace(timepoint, "compliant_", ""),
+    timepoint = factor(timepoint, levels = c("pre", "2h", "6h", "24h", "last"))
+  )
+
+compliance_summary <- vdr_long %>%
+  filter(!is.na(compliant)) %>%
+  group_by(dx, timepoint) %>%
+  summarise(
+    total = n(),
+    compliant_n = sum(compliant),
+    percent_compliant = mean(compliant) * 100,
+    label = paste0(compliant_n, "/", total),
+    .groups = "drop"
+  )
+
+ggplot(compliance_summary, aes(x = timepoint, y = percent_compliant, fill = dx)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  geom_text(
+    aes(label = label),
+    position = position_dodge(width = 0.8),
+    vjust = -0.3,
+    size = 3.5
+  ) +
+  labs(
+    title = "PALICC2 Compliance Over Time by Diagnosis",
+    x = "Timepoint Relative to VDR Initiation",
+    y = "Percent Compliant",
+    fill = "Diagnosis"
+  ) +
+  ylim(0, 100) +
+  theme_minimal()
+
+```
+
+###Below does not work####
+
+```{r}
+# which variables influence compliance at each time point
+# vdr <- vdr %>%
+#   mutate(
+#     # Define component failures for each time point
+#     fail_peepfio2_pre = !peepfio2_pre,
+#     fail_pip_pre      = !pip_pre_ok,
+#     fail_ph_pre       = !ph_pre_ok,
+# 
+#     fail_peepfio2_2h  = !peepfio2_2h,
+#     fail_pip_2h       = !pip_2h_ok,
+#     fail_ph_2h        = !ph_2h_ok,
+# 
+#     fail_peepfio2_6h  = !peepfio2_6h,
+#     fail_pip_6h       = !pip_6h_ok,
+#     fail_ph_6h        = !ph_6h_ok,
+# 
+#     fail_peepfio2_24h = !peepfio2_24h,
+#     fail_pip_24h      = !pip_24h_ok,
+#     fail_ph_24h       = !ph_24h_ok,
+# 
+#     fail_peepfio2_last = !peepfio2_last,
+#     fail_pip_last      = !pip_last_ok,
+#     fail_ph_last       = !ph_last_ok
+#   )
+# 
+# generate_reason <- function(fail_pip, fail_peepfio2, fail_ph) {
+#   case_when(
+#     !fail_pip & !fail_peepfio2 & !fail_ph ~ NA_character_,
+#     fail_pip & !fail_peepfio2 & !fail_ph ~ "PIP only",
+#     !fail_pip & fail_peepfio2 & !fail_ph ~ "PEEP/FiO2 only",
+#     !fail_pip & !fail_peepfio2 & fail_ph ~ "pH only",
+#     fail_pip & fail_peepfio2 & !fail_ph ~ "PIP + PEEP/FiO2",
+#     fail_pip & !fail_peepfio2 & fail_ph ~ "PIP + pH",
+#     !fail_pip & fail_peepfio2 & fail_ph ~ "PEEP/FiO2 + pH",
+#     fail_pip & fail_peepfio2 & fail_ph ~ "All three"
+#   )
+# }
+# 
+# vdr <- vdr %>%
+#   mutate(
+#     reason_noncompliant_pre   = generate_reason(fail_pip_pre, fail_peepfio2_pre, fail_ph_pre),
+#     reason_noncompliant_2h    = generate_reason(fail_pip_2h, fail_peepfio2_2h, fail_ph_2h),
+#     reason_noncompliant_6h    = generate_reason(fail_pip_6h, fail_peepfio2_6h, fail_ph_6h),
+#     reason_noncompliant_24h   = generate_reason(fail_pip_24h, fail_peepfio2_24h, fail_ph_24h),
+#     reason_noncompliant_last  = generate_reason(fail_pip_last, fail_peepfio2_last, fail_ph_last)
+#   )
+# 
+# library(tidyverse)
+# 
+# noncompliant_reasons_long <- vdr %>%
+#   select(starts_with("reason_noncompliant_")) %>%
+#   pivot_longer(
+#     everything(),
+#     names_to = "timepoint",
+#     names_prefix = "reason_noncompliant_",
+#     values_to = "reason"
+#   ) %>%
+#   filter(!is.na(reason))  # keep only noncompliant patients
+# 
+# summary_table <- noncompliant_reasons_long %>%
+#   group_by(timepoint, reason) %>%
+#   summarise(
+#     n = n(),
+#     .groups = "drop"
+#   ) %>%
+#   group_by(timepoint) %>%
+#   mutate(percent = round(100 * n / sum(n), 1)) %>%
+#   arrange(timepoint, desc(n))
+# 
+# summary_table
+
+```

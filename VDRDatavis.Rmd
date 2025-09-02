@@ -1,0 +1,527 @@
+---
+title: "VDR DataVis"
+author: "ali"
+date: "2025-09-01"
+output: html_document
+---
+
+####Get Libraries####
+```{r}
+library(tidyverse)
+library(lubridate)
+library(janitor)
+library(readxl)
+library(glue)
+library(broom)
+library(dplyr)
+library(ggplot2)
+library(janitor)
+library(visdat)
+library(writexl)
+```
+
+####Import and Clean####
+```{r} 
+#Import:
+vdr <- read_xlsx("C:/Users/aaust/OneDrive/Desktop/VDR/vdr.xlsx")
+
+#Clean column names: 
+vdr <- clean_names(vdr)
+
+#Change all DOB values to numeric
+vdr$dob_clean <- as.numeric(vdr$dob)
+
+#numeric to date
+vdr$dob_clean <- as.Date(vdr$dob_clean, origin = "1899-12-30")
+
+#remove all instances of "never on VDR"
+vdr <- vdr[!grepl("never on vdr", vdr$dob, ignore.case = TRUE), ]
+
+bad_phrases <- c("never on vdr", "never on vdr", "not on vdr", "not on the vdr", "can't find patient", "can't find a patient",
+                 "almost no vent setting documentation", "actually on bipap")
+
+pattern <- paste(bad_phrases, collapse = "|")  # creates a regex pattern
+vdr <- vdr[!grepl(pattern, vdr$dob, ignore.case = TRUE), ]
+
+#removing the first row because it is a key 
+vdr <- vdr[-1, ]
+
+#clean up prematurity
+vdr <- vdr %>%
+  mutate(prematurity_clean = case_when(
+    prematurity == "1" ~ 1,
+    prematurity == "0" ~ 0,
+    TRUE ~ NA_real_  # Treat "unknown", "not documented", etc as NA
+  ))
+
+vdr$prematurity_clean <- as.numeric(as.character(vdr$prematurity))
+
+# Now define and account for missingness: 
+# First, missingness by column:
+
+# Create a tidy table with count and % missing for every column
+missing_by_col <- vdr %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "missing_count") %>%
+  mutate(
+    total_rows = nrow(vdr),
+    percent_missing = round(100 * missing_count / total_rows, 1)
+  ) %>%
+  arrange(desc(percent_missing))
+
+#view(missing_by_col) 
+
+# Identify columns with 100% missingness:
+cols_drop_100 <- missing_by_col %>%
+  filter(percent_missing == 100) %>%
+  pull(variable)
+
+# See which columns those are: 
+#view(cols_drop_100)
+
+# Drop those columns from vdr
+if (length(cols_drop_100) > 0) {
+  vdr <- vdr %>% select(-all_of(cols_drop_100))
+}
+
+# Now, missingness by row: 
+cols_to_check <- names(vdr)
+
+# Safety check: if you somehow excluded everything, stop early
+if (length(cols_to_check) == 0) {
+  stop("No columns available to assess for row-wise missingness. Something has gone terribly wrong.")
+}
+
+# Compute row-wise missingness
+vdr <- vdr %>%
+  mutate(
+    n_checked    = length(cols_to_check),
+    n_missing    = rowSums(is.na(pick(all_of(cols_to_check)))),
+    n_nonmissing = n_checked - n_missing,
+    miss_pct     = round(100 * n_missing / n_checked, 1)
+  )
+
+# Show a quick table of patient-level missingness (highest first)
+row_missing_table <- vdr %>%
+  select(any_of(c("mrn")), n_checked, n_nonmissing, n_missing, miss_pct) %>%
+  arrange(desc(miss_pct))
+#view(row_missing_table)
+
+# Set an adjustable threshold for elimination (start at 75%)
+row_missing_threshold <- 75
+
+# Identify rows to exclude vs keep (≥ threshold = exclude)
+vdr_rows_excluded <- vdr %>% filter(miss_pct >= row_missing_threshold)
+vdr_rows_kept     <- vdr %>% filter(miss_pct <  row_missing_threshold | is.na(miss_pct))
+
+# Print counts and list of excluded MRNs with their missingness %
+cat("\nRow-wise missingness threshold: ", row_missing_threshold, "%\n", sep = "")
+cat("Rows kept: ", nrow(vdr_rows_kept), "\n", sep = "")
+
+# Make the elimination effective for downstream steps
+vdr <- vdr_rows_kept
+
+#Drop helper columns from the kept dataset:
+vdr <- vdr %>% select(-n_checked, -n_missing, -n_nonmissing, -miss_pct)
+
+#Define illness (Bronchiolitis vs. not; column 'primary dx based on chart review')
+#make a new variable called dx that assigns either bronchiolitis or other to each patient based on the following rules: 
+
+vdr <- vdr %>%
+  mutate(
+    dx = case_when(
+      # 1. Direct mention of bronchiolitis
+      str_detect(tolower(`primary_dx_based_on_chart_review`), "bronchiolitis") ~ "bronchiolitis",
+      
+      # 2. Mentions of pneumonia, virus, viral, PNA *and* age < 24 months
+      (str_detect(tolower(`primary_dx_based_on_chart_review`), "pna|virus|viral|pneumonia") & 
+       `age_months` < 24) ~ "bronchiolitis",
+      
+      # 3. Everything else
+      TRUE ~ "other"
+    )
+  )
+
+#Eliminate rows that do not have a primary diagnosis (those rows also mostly had no other info recorded)
+vdr <- vdr %>% 
+  filter(!is.na(`primary_dx_based_on_chart_review`))
+
+#Visualize the re-assigned dxs 
+#view(vdr %>% select(`primary_dx_based_on_chart_review`, 'age_months', dx))
+
+#How many bronchiolitics vs. others? 
+vdr %>%
+  dplyr::count(dx) %>%
+  mutate(percent = round(100 * n / sum(n), 1))
+
+
+
+
+#After this cleaning chunk, we end with 
+##Rows: 111
+##Columns: 244
+
+#Save the clean dataset as a new xlsx for distribution: 
+write_xlsx(vdr, "C:/Users/aaust/OneDrive/Desktop/VDR/vdr_clean.xlsx")
+
+
+#colnames(vdr)
+
+```
+
+####Set up scaffolding####
+```{r}
+############################################################
+# My scaffolding: 
+### 1. CO₂ Clearance
+# - **Table 1a**: All patients (summary statistics across timepoints)
+# - **Table 1b**: Bronchiolitis only
+# - **Table 1c**: Non-bronchiolitis only
+# - **Figure 1**: Time-series line plot of PaCO₂ (average values)
+#   - Lines: All patients, Bronchiolitis, Non-bronchiolitis
+
+### 2. FiO₂ Need
+# - **Table 2a**: All patients
+# - **Table 2b**: Bronchiolitis only
+# - **Table 2c**: Non-bronchiolitis only
+# - **Figure 2**: Time-series line plot of FiO₂ requirement (average values)
+#   - Lines: All patients, Bronchiolitis, Non-bronchiolitis
+
+### 3. OI Reduction
+# - **Table 3a**: All patients
+# - **Table 3b**: Bronchiolitis only
+# - **Table 3c**: Non-bronchiolitis only
+# - **Figure 3**: Time-series line plot of Oxygenation Index (average values)
+#   - Lines: All patients, Bronchiolitis, Non-bronchiolitis
+
+### 4. PALICC Compliance
+# - **Table 4a**: All patients
+# - **Table 4b**: Bronchiolitis only
+# - **Table 4c**: Non-bronchiolitis only
+# - **Figure 4**: Time-series line plot of % PALICC compliance
+#   - Lines: All patients, Bronchiolitis, Non-bronchiolitis
+############################################################
+
+# --- Define column groups ---
+co2_cols <- c(
+  "pa_co2_pre_vdr",
+  "average_co2_values_between_0_and_2_hours_on_vdr",
+  "pa_co2_2_hours_into_vdr_run",
+  "average_co2_values_between_2_between_6_hours_on_vdr",
+  "pa_co2_6_hours_into_vdr_run",
+  "pa_co2_right_before_end_of_vdr_run",
+  "average_pa_co2_values_between_0_and_2_hours_off_vdr",
+  "pa_co2_2_hours_off_of_vdr",
+  "average_pa_co2_between_2_and_6_hours_off_of_vdr",
+  "pa_co2_6_hours_off_of_vdr_run"
+)
+
+vdr <- vdr %>% mutate(across(all_of(co2_cols), ~ suppressWarnings(as.numeric(.))))
+
+
+
+fi_o2_cols <- c(
+  "fi_o2_pre_vdr",
+  "fi_o2_2_hours_into_vdr_run",
+  "fi_o2_6_hours_into_vdr_run",
+  "last_vdr_fi_o2",
+  "fi_o2_2_hours_off_of_vdr",
+  "fi_o2_6_hours_off_of_vdr"
+)
+
+vdr <- vdr %>% mutate(across(all_of(fi_o2_cols), ~ suppressWarnings(as.numeric(.))))
+
+
+oi_cols <- c(
+  "oi_pre_vdr",
+  "oi_2_hours_into_vdr_run",
+  "oi_6_hours_into_vdr_run",
+  "last_oi_on_vdr",
+  "oi_2_hours_off_of_vdr",
+  "oi_6_hours_off_of_vdr"
+)
+
+vdr <- vdr %>% mutate(across(all_of(oi_cols), ~ suppressWarnings(as.numeric(.))))
+
+#Plug in PALICC 2 compliance checker: 
+check_palicc2_compliance <- function(fio2, peep, pip, ph) {
+  fio2_rounded <- round(fio2 / 100, 1)
+
+  palicc_peepfio2 <- case_when(
+    fio2_rounded == 0.3 & peep >= 5 ~ TRUE,
+    fio2_rounded == 0.4 & peep >= 5 ~ TRUE,
+    fio2_rounded == 0.5 & peep >= 8 ~ TRUE,
+    fio2_rounded == 0.6 & peep >= 10 ~ TRUE,
+    fio2_rounded == 0.7 & peep >= 10 ~ TRUE,
+    fio2_rounded == 0.8 & peep >= 14 ~ TRUE,
+    fio2_rounded == 0.9 & peep >= 14 ~ TRUE,
+    fio2_rounded == 1.0 & peep >= 18 ~ TRUE,
+    TRUE ~ FALSE
+  )
+
+  pip_ok <- pip <= 28
+  ph_ok  <- ph >= 7.2
+
+  palicc_peepfio2 & pip_ok & ph_ok
+}
+
+vdr <- vdr %>%
+  mutate(
+    peep_2h = suppressWarnings(as.numeric(osc_peep_2_hours_into_vdr_run)) + 2,
+    peep_6h = suppressWarnings(as.numeric(osc_peep_6_hours_into_vdr_run)) + 2,
+    peep_24h = suppressWarnings(as.numeric(osc_peep_24_hours_into_vdr_run)) + 2
+  )
+
+vdr <- vdr %>%
+  mutate(
+    # baseline peep
+    peep_pre  = peep_pre_vdr,
+    peep_last = suppressWarnings(as.numeric(last_vdr_osc_peep)) + 2,
+
+    compliant_pre  = check_palicc2_compliance(fi_o2_pre_vdr, peep_pre,  pip_pre_vdr, p_h_pre_vdr),
+    compliant_2h   = check_palicc2_compliance(fi_o2_2_hours_into_vdr_run, peep_2h, pulsatile_flowrate_2_hours_into_vdr, p_h_2_hours_into_vdr_run),
+    compliant_6h   = check_palicc2_compliance(fi_o2_6_hours_into_vdr_run, peep_6h, pulsatile_flowrate_6_hours_into_vdr, p_h_6_hours_into_vdr_run),
+    compliant_24h  = check_palicc2_compliance(fi_o2_24_hours_into_run, peep_24h, pulsatile_flowrate_24_hours_into_vdr, p_h_24_hours_into_vdr_run),
+    compliant_last = check_palicc2_compliance(last_vdr_fi_o2, peep_last, last_vdr_pulsatile_flowrate, p_h_right_before_end_of_vdr_run)
+  )
+
+#Then define the column names here: 
+palicc_cols <- c(
+  "compliant_pre",
+  "compliant_2h",
+  "compliant_6h",
+  "compliant_24h",
+  "compliant_last"
+)
+
+#Rename dx for future tables. 
+vdr_bronch    <- vdr %>% filter(dx == "bronchiolitis")
+vdr_nonbronch <- vdr %>% filter(dx == "other")
+
+# --- Generic summary stats function ---
+make_summary_table <- function(data, cols, group_label = "All") {
+  data %>%
+    select(all_of(cols)) %>%
+    pivot_longer(cols = everything(), names_to = "timepoint", values_to = "value") %>%
+    mutate(timepoint = factor(timepoint, levels = cols)) %>%   # keep in clinical order
+    group_by(timepoint) %>%
+    summarise(
+      mean   = mean(value, na.rm = TRUE),
+      median = median(value, na.rm = TRUE),
+      min    = min(value, na.rm = TRUE),
+      max    = max(value, na.rm = TRUE),
+      sd     = sd(value, na.rm = TRUE),
+      n      = sum(!is.na(value)),
+      .groups = "drop"
+    ) %>%
+    mutate(group = group_label)
+}
+
+# --- Time series plotting function ---
+# If the columns are logical (true/false) as they are for PALICC compliance, we will coerce into the mean(compliant_x) to end up with a % of patients compliant at that time point. 
+library(wesanderson)  # make sure this is loaded at the top of your script
+
+make_time_series <- function(df_all, df_bronch, df_nonbronch, ylab, title, 
+                             scale_percent = FALSE, x_labels = NULL, y_limits = NULL) {
+  df_all$group    <- "All"
+  df_bronch$group <- "Bronchiolitis"
+  df_nonbronch$group <- "Other"
+  
+  df_plot <- bind_rows(df_all, df_bronch, df_nonbronch)
+  
+  if (scale_percent) {
+    df_plot <- df_plot %>% mutate(mean = mean * 100)
+  }
+  
+  p <- ggplot(df_plot, aes(x = timepoint, y = mean, group = group, color = group)) +
+    geom_line(size = 1.2) +
+    geom_point(size = 2) +
+    labs(title = title, x = "Timepoint", y = ylab) +
+    theme_minimal(base_size = 14) +
+    scale_color_manual(values = wes_palette("FantasticFox1")[1:3]) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+  
+  if (!is.null(x_labels)) {
+    p <- p + scale_x_discrete(labels = x_labels)
+  }
+  
+  if (!is.null(y_limits)) {
+    p <- p + coord_cartesian(ylim = y_limits)
+  }
+  
+  return(p)
+}
+
+```
+```{r}
+# Chunk 1: Tables 1a–4a (All patients)
+table_1a <- make_summary_table(vdr, co2_cols, "All")
+table_2a <- make_summary_table(vdr, fi_o2_cols, "All")
+table_3a <- make_summary_table(vdr, oi_cols, "All")
+table_4a <- make_summary_table(vdr, palicc_cols, "All")
+```
+```{r}
+# Chunk 2: Tables 1b–4b (Bronchiolitis only)
+table_1b <- make_summary_table(vdr_bronch, co2_cols, "Bronchiolitis")
+table_2b <- make_summary_table(vdr_bronch, fi_o2_cols, "Bronchiolitis")
+table_3b <- make_summary_table(vdr_bronch, oi_cols, "Bronchiolitis")
+table_4b <- make_summary_table(vdr_bronch, palicc_cols, "Bronchiolitis")
+
+# Chunk 3: Tables 1c–4c (Other diagnoses)
+table_1c <- make_summary_table(vdr_nonbronch, co2_cols, "Other")
+table_2c <- make_summary_table(vdr_nonbronch, fi_o2_cols, "Other")
+table_3c <- make_summary_table(vdr_nonbronch, oi_cols, "Other")
+table_4c <- make_summary_table(vdr_nonbronch, palicc_cols, "Other")
+
+#Chunk 4: Figures 1-4
+# A: CO₂ clearance
+fig1 <- make_time_series(df_co2_all, df_co2_bronch, df_co2_non,
+                         "PaCO₂ (mmHg)", "Figure 1: CO₂ Clearance",
+                         x_labels = c("Pre", "0–2h Avg", "2h", "2–6h Avg", "6h", 
+                                      "End VDR", "0–2h Off Avg", "2h Off", 
+                                      "2–6h Off Avg", "6h Off"),
+                         y_limits = c(40, 80))
+
+fig1
+
+# B: FiO₂ need
+fig2 <- make_time_series(df_fio2_all, df_fio2_bronch, df_fio2_non,
+                         "FiO₂ (%)", "Figure 2: FiO₂ Need",
+                         x_labels = c("Pre", "2h", "6h", "End VDR", "2h Off", "6h Off"),
+                         y_limits = c(21, 100))
+
+fig2
+
+# C: OI reduction
+fig3 <- make_time_series(df_oi_all, df_oi_bronch, df_oi_non,
+                         "Oxygenation Index", "Figure 3: OI Reduction",
+                         x_labels = c("Pre", "2h", "6h", "End VDR", "2h Off", "6h Off"),
+                         y_limits = c(4, 20))
+
+fig3
+
+# D: PALICC compliance
+fig4 <- make_time_series(df_palicc_all, df_palicc_bronch, df_palicc_non,
+                         "% Compliant", "Figure 4: PALICC Compliance",
+                         scale_percent = TRUE,
+                         x_labels = c("Pre", "2h", "6h", "24h", "End VDR"),
+                         y_limits = c(0, 100))
+
+fig4
+
+```
+
+
+```{r}
+############################################################
+# Chunk 5: Export all tables (as PNGs) and figures (as PNGs)
+############################################################
+
+# ---- Packages for exporting tables as PNGs ----
+suppressPackageStartupMessages({
+  if (!requireNamespace("gt", quietly = TRUE)) install.packages("gt")
+  if (!requireNamespace("webshot2", quietly = TRUE)) install.packages("webshot2")
+  if (!requireNamespace("fs", quietly = TRUE)) install.packages("fs")
+  if (!requireNamespace("ragg", quietly = TRUE)) install.packages("ragg")
+})
+library(gt)
+library(webshot2)   # needed by gt to render PNGs
+library(fs)
+library(ragg)       # crisp, high-DPI raster device for figures
+
+# Ensure a render engine is available for gt PNG export
+# (PhantomJS not required for webshot2, but this is harmless if already set)
+try(webshot2::install_phantomjs(), silent = TRUE)
+
+# ---- Output folder ----
+out_dir <- "vdr_exports"
+fs::dir_create(out_dir)
+
+# ---- Helper: save a gt table as a PNG ----
+save_table_png <- function(df, file_name, title = NULL, subtitle = NULL) {
+  gt(df) |>
+    tab_options(table.font.size = px(12)) |>
+    fmt_number(columns = where(is.numeric), decimals = 2) |>
+    (\(x) if (!is.null(title)) tab_header(x, title = md(title), subtitle = subtitle) else x)() |>
+    tab_options(
+      data_row.padding = px(4),
+      table.border.top.width = px(0),
+      table.border.bottom.width = px(0)
+    ) |>
+    gt::gtsave(filename = file.path(out_dir, file_name), vwidth = 1400, vheight = 900)
+}
+
+# ---- Helper: save a ggplot as a high-DPI PNG ----
+save_plot_png <- function(plot_obj, file_name, width = 10, height = 6, dpi = 600) {
+  ggplot2::ggsave(
+    filename = file.path(out_dir, file_name),
+    plot = plot_obj,
+    width = width, height = height, dpi = dpi,
+    device = ragg::agg_png, units = "in", limitsize = FALSE
+  )
+}
+
+# (Optional) Also save vector copies for Illustrator editing:
+save_plot_pdf <- function(plot_obj, file_name, width = 10, height = 6) {
+  ggplot2::ggsave(file.path(out_dir, gsub("\\.png$", ".pdf", file_name)),
+                  plot_obj, width = width, height = height, device = cairo_pdf)
+}
+save_plot_svg <- function(plot_obj, file_name, width = 10, height = 6) {
+  ggplot2::ggsave(file.path(out_dir, gsub("\\.png$", ".svg", file_name)),
+                  plot_obj, width = width, height = height, device = "svg")
+}
+
+# ---- Table objects you already created (Chunks 1–3) mapped to filenames ----
+tables_list <- list(
+  list(obj = table_1a, fname = "Table_1a_CO2_All.png",            title = "Table 1a. CO₂ Clearance — All"),
+  list(obj = table_1b, fname = "Table_1b_CO2_Bronchiolitis.png",   title = "Table 1b. CO₂ Clearance — Bronchiolitis"),
+  list(obj = table_1c, fname = "Table_1c_CO2_Other.png",           title = "Table 1c. CO₂ Clearance — Other"),
+
+  list(obj = table_2a, fname = "Table_2a_FiO2_All.png",            title = "Table 2a. FiO₂ Need — All"),
+  list(obj = table_2b, fname = "Table_2b_FiO2_Bronchiolitis.png",  title = "Table 2b. FiO₂ Need — Bronchiolitis"),
+  list(obj = table_2c, fname = "Table_2c_FiO2_Other.png",          title = "Table 2c. FiO₂ Need — Other"),
+
+  list(obj = table_3a, fname = "Table_3a_OI_All.png",              title = "Table 3a. OI Reduction — All"),
+  list(obj = table_3b, fname = "Table_3b_OI_Bronchiolitis.png",    title = "Table 3b. OI Reduction — Bronchiolitis"),
+  list(obj = table_3c, fname = "Table_3c_OI_Other.png",            title = "Table 3c. OI Reduction — Other"),
+
+  list(obj = table_4a, fname = "Table_4a_PALICC_All.png",          title = "Table 4a. PALICC Compliance — All"),
+  list(obj = table_4b, fname = "Table_4b_PALICC_Bronchiolitis.png",title = "Table 4b. PALICC Compliance — Bronchiolitis"),
+  list(obj = table_4c, fname = "Table_4c_PALICC_Other.png",        title = "Table 4c. PALICC Compliance — Other")
+)
+
+# ---- Save all 12 tables as PNGs ----
+invisible(purrr::walk(tables_list, ~ save_table_png(.$obj, .$fname, title = .$title)))
+
+# ---- Figures you already created (Chunk 4) mapped to filenames ----
+figs_list <- list(
+  list(obj = fig1, fname = "Figure_1_CO2_Clearance.png"),
+  list(obj = fig2, fname = "Figure_2_FiO2_Need.png"),
+  list(obj = fig3, fname = "Figure_3_OI_Reduction.png"),
+  list(obj = fig4, fname = "Figure_4_PALICC_Compliance.png")
+)
+
+# ---- Save all 4 figures as PNGs (and optional PDF/SVG) ----
+invisible(purrr::walk(figs_list, ~ {
+  save_plot_png(.$obj, .$fname)
+  # Optional vector copies for Illustrator (uncomment if you want these too):
+  # save_plot_pdf(.$obj, .$fname)
+  # save_plot_svg(.$obj, .$fname)
+}))
+
+message("✅ Export complete. Files are in: ", normalizePath(out_dir))
+```
+
+
+if (!requireNamespace("patchwork", quietly = TRUE)) install.packages("patchwork")
+library(patchwork)
+
+grid_2x2 <- (fig1 | fig2) /
+            (fig3 | fig4) +
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+
+grid_2x2
+
